@@ -93,7 +93,7 @@ check("command off yields empty section", textFor("s-lite") === "");
 command.handler({ agent: { session: { id: "s-bad" } }, rawInput: "lite" });
 const bad = command.handler({ agent: { session: { id: "s-bad" } }, rawInput: "banana" });
 check("unknown input keeps mode without error", bad.kind === "success" && textFor("s-bad").includes("level: lite"));
-check("unknown input returns help text", String(bad.text).includes("lazy-senior-dev"));
+check("unknown input shows the skill card", String(bad.text).includes("lazy senior developer"));
 
 command.handler({ agent: { session: { id: "s-bare" } }, rawInput: "" });
 check("bare /ponytail activates full", textFor("s-bare").includes("level: full"));

@@ -966,22 +966,13 @@ export function apply(ctx) {
       }
       const mode = normalizeMode(arg);
       if (!mode) {
-        // `/ponytail <question>` is a real question, not a bad mode: hand it to
-        // the model instead of answering with the mode line.
-        const question = typeof rawInput === "string" ? rawInput.trim() : "";
-        if (question && createUserMessage && agent && typeof agent.followup === "function") {
-          try {
-            agent.followup(createUserMessage({
-              content: [{ type: "text", text: question }],
-              source: { kind: "user" },
-            }));
-            return { kind: "success", text: "Ponytail: answering your question…" };
-          } catch { /* fall through to a plain reply */ }
+        // `/ponytail <question>` is not a mode: show the skill card, like the
+        // other skill commands, instead of answering with the mode line.
+        try {
+          return { kind: "success", text: getSkillBody("ponytail") };
+        } catch (error) {
+          return { kind: "error", text: `Could not read the ponytail skill: ${error.message}` };
         }
-        return {
-          kind: "success",
-          text: "Ponytail = lazy-senior-dev mode: the smallest complete change, with a reply naming what was skipped and the risk. 用法：/ponytail [lite|full|ultra|off]（默认 full）。",
-        };
       }
       setMode(sessionId, mode);
       return { kind: "success", text: `Ponytail mode: ${mode}.` };
