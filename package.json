@@ -1,0 +1,57 @@
+{
+  "name": "dsh-ponytail",
+  "version": "5.3.3",
+  "description": "Ponytail — the laziest senior dev, as a DSH plugin. Always-on lazy-senior-dev ruleset + the six ponytail skills + a /ponytail mode command, ported from DietrichGebert/ponytail.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node test.mjs",
+    "sync": "node scripts/sync-upstream.mjs",
+    "sync:pack": "node scripts/sync-upstream.mjs --pack"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "skills/",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "ponytail",
+    "skill"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DietrichGebert/ponytail.git"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-skill": "*",
+    "@deepseek-ai/dsh-system-prompt": "*",
+    "@deepseek-ai/dsh-commands": "*",
+    "@deepseek-ai/dsh-llm": "*"
+  },
+  "upstream": {
+    "name": "@dietrichgebert/ponytail",
+    "version": "5.3.3"
+  }
+}
