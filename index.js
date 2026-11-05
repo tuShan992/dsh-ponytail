@@ -1132,5 +1132,5 @@ export function apply(ctx) {
 }
 
 // Exposed for the cleanup/source self-tests only; not part of the plugin API.
-export { dependsOnSelf, removeSourceClone, ensureSourceRepo };
+export { dependsOnSelf, removeSourceClone, ensureSourceRepo, cleanupWorkerCode };
 
