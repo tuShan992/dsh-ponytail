@@ -282,7 +282,8 @@ window.__ModuleLoader__.load({
             return body
           })
           .then((body) => {
-            if (body && body.ok) loadStatus(true)
+            if (!body || !body.ok) return
+            if (body.installedDir) { setStatus(body); setError(''); remoteFromStatus(body) } else { loadStatus(true) }
           })
           .catch((e) => setError(String((e && e.message) || e)))
           .finally(() => setBusy(false))
@@ -296,7 +297,9 @@ window.__ModuleLoader__.load({
         ? '仅本地源码安装可同步 / Local install only'
         : syncMode === 'reinstall'
           ? '重新安装更新 / Reinstall to update'
-          : '同步上游并重装 / Sync upstream & reinstall'
+          : syncMode === 'clone'
+            ? '克隆并同步上游 / Clone & sync upstream'
+            : '同步上游并重装 / Sync upstream & reinstall'
 
       return h(
         'div',

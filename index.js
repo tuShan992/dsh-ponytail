@@ -420,10 +420,82 @@ function resolveSourceDir() {
     const ref = spec.slice(5);
     return path.isAbsolute(ref) ? ref : path.resolve(profileDir(), ref);
   }
-  // A git/npm install has no local source checkout to sync from.
-  if (spec) return null;
-  if (process.env.DSH_HOME) return path.join(process.env.DSH_HOME, "plugins", "dsh-ponytail");
-  return path.join(os.homedir(), ".dsh", "plugins", "dsh-ponytail");
+  // A git/npm install keeps its mutable source checkout under DSH_HOME.
+  return defaultPluginDir();
+}
+
+function defaultPluginDir() {
+  const home = process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
+  return path.join(home, "plugins", "dsh-ponytail");
+}
+
+function gitUrlFromSpec(spec) {
+  const s = String(spec || "").trim();
+  const m = /^github:([^#\s]+?)(?:#.*)?$/.exec(s);
+  if (m) return `https://github.com/${m[1]}.git`;
+  if (s.startsWith("git+")) return s.slice(4).replace(/#.*$/, "");
+  if (/^https?:\/\//.test(s)) return s.replace(/#.*$/, "");
+  return null;
+}
+
+function runGit(args, cwd, timeoutMs = 180000) {
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let child;
+    let timer = null;
+    let timedOut = false;
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "echo", CI: "1" };
+    try {
+      child = spawn("git", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      resolve({ code: -1, stdout, stderr: errorMessage(error), timedOut });
+      return;
+    }
+    if (timeoutMs) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      }, timeoutMs);
+    }
+    if (child.stdout) child.stdout.on("data", (c) => { stdout += c; });
+    if (child.stderr) child.stderr.on("data", (c) => { stderr += c; });
+    child.on("error", (error) => { if (timer) clearTimeout(timer); resolve({ code: -1, stdout, stderr: stderr + errorMessage(error), timedOut }); });
+    child.on("close", (code) => { if (timer) clearTimeout(timer); resolve({ code: code == null ? -1 : code, stdout, stderr, timedOut }); });
+  });
+}
+
+// Materialize or refresh the plugin's source checkout under DSH_HOME, so the
+// sync button clones it locally instead of depending on an external directory.
+async function ensureSourceRepo(dir, steps) {
+  const url = process.env.PONYTAIL_GIT_URL || gitUrlFromSpec(installSpec());
+  if (!fs.existsSync(path.join(dir, "package.json"))) {
+    if (!url) return { ok: false, error: "no local checkout and no git url to clone" };
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    const r = await runGit(["clone", "--depth", "1", url, dir], path.dirname(dir));
+    steps.push({ name: `git clone ${url}`, code: r.code, output: (r.stdout + r.stderr).trim().slice(-2000) });
+    return { ok: r.code === 0, error: r.code === 0 ? undefined : "git clone failed" };
+  }
+  if (fs.existsSync(path.join(dir, ".git"))) {
+    let f = await runGit(["-C", dir, "fetch", "--depth", "1", "origin"], dir);
+    if (f.code !== 0 && url) f = await runGit(["-C", dir, "fetch", "--depth", "1", url, "HEAD"], dir);
+    if (f.code === 0) {
+      const rr = await runGit(["-C", dir, "reset", "--hard", "FETCH_HEAD"], dir);
+      steps.push({ name: "git fetch + reset", code: rr.code, output: (f.stdout + f.stderr + rr.stdout + rr.stderr).trim().slice(-2000) });
+    } else {
+      steps.push({ name: "git fetch", code: f.code, output: (f.stdout + f.stderr).trim().slice(-1000) });
+    }
+  }
+  return { ok: true };
+}
+
+function nudgeReload() {
+  // Replaced plugin files leave the host's routes unmounted (shows as HTTP 404);
+  // bumping mtime makes the host reload the plugin.
+  const now = new Date();
+  for (const f of ["index.js", "cordis.patch.yml"]) {
+    try { fs.utimesSync(path.join(installedDir(), f), now, now); } catch { /* ignore */ }
+  }
 }
 
 function installedDir() {
@@ -483,9 +555,9 @@ function syncSnapshot() {
   const spec = installSpec();
   const isLocalSpec = Boolean(spec && (spec.startsWith("file:") || spec.startsWith("link:")));
   const hasLocalSource = Boolean(sourceDir && script && fs.existsSync(script));
-  // "local" = edit the source tree then mirror it; "reinstall" = git/npm install,
-  // re-run pnpm against the same spec; "none" = nothing we can do.
-  const syncMode = hasLocalSource ? "local" : spec && !isLocalSpec ? "reinstall" : "none";
+  // "local" = checkout exists (edit + mirror); "clone" = provision/refresh the
+  // checkout under DSH_HOME then sync; "none" = nothing we can do.
+  const syncMode = hasLocalSource ? "local" : spec ? "clone" : "none";
   const sourceUpstream = sourcePkg && sourcePkg.upstream ? sourcePkg.upstream.version : null;
   const installedUpstream = installedPkg && installedPkg.upstream ? installedPkg.upstream.version : null;
   return {
@@ -497,7 +569,7 @@ function syncSnapshot() {
     installedVersion: installedPkg ? installedPkg.version : null,
     node: resolveBundledNode(),
     pnpm: resolvePnpmCjs() || null,
-    canSync: hasLocalSource || syncMode === "reinstall",
+    canSync: Boolean(hasLocalSource || spec),
     syncMode,
   };
 }
@@ -886,29 +958,42 @@ export function apply(ctx) {
           }
           const steps = [];
           try {
-            const sourceDir = resolveSourceDir();
+            let sourceDir = resolveSourceDir();
             const spec = installSpec();
             const isLocalSpec = Boolean(spec && (spec.startsWith("file:") || spec.startsWith("link:")));
 
-            // git/npm install: no local source tree. Reinstall the same spec to
-            // pull the latest commit (backed up + rolled back on failure).
-            if (!sourceDir && spec && !isLocalSpec) {
-              if (!resolvePnpmCjs()) {
-                return sendJson(res, 500, { ok: false, error: "pnpm 运行时未找到，无法重新安装 git/npm 安装。", steps, ...syncSnapshot() });
+            // git/npm install: materialize/refresh a checkout under DSH_HOME so
+            // the source no longer depends on an external directory, sync the
+            // upstream skills, then switch the install to that local checkout.
+            if (!isLocalSpec && spec) {
+              const dir = defaultPluginDir();
+              const prov = await ensureSourceRepo(dir, steps);
+              if (!prov.ok) {
+                const result = await reinstallFromSpec(spec, steps);
+                if (!result.ok) return sendJson(res, 500, { ok: false, error: result.error, steps, ...syncSnapshot() });
+                return sendJson(res, 200, { ok: true, mode: "reinstall", steps, ...syncSnapshot() });
               }
-              const result = await reinstallFromSpec(spec, steps);
-              if (!result.ok) return sendJson(res, 500, { ok: false, error: result.error, steps, ...syncSnapshot() });
-              return sendJson(res, 200, { ok: true, mode: "reinstall", steps, ...syncSnapshot() });
+              const node = resolveBundledNode();
+              const script = path.join(dir, "scripts", "sync-upstream.mjs");
+              if (fs.existsSync(script)) {
+                const s = await runNode(node, [script], dir, { timeoutMs: 180000 });
+                steps.push({ name: "sync-upstream", code: s.code, output: (s.stdout + s.stderr).trim().slice(-4000) });
+                if (s.code !== 0) return sendJson(res, 500, { ok: false, error: "sync-upstream failed", steps, ...syncSnapshot() });
+              }
+              if (!resolvePnpmCjs()) return sendJson(res, 500, { ok: false, error: "pnpm 运行时未找到。", steps, ...syncSnapshot() });
+              const added = await runPnpm(["add", `file:${dir.replace(/\\/g, "/")}`], profileDir(), 240000);
+              steps.push({ name: `pnpm add file:${dir}`, code: added.code, output: (added.stdout + added.stderr).trim().slice(-2000) });
+              if (added.code !== 0) return sendJson(res, 500, { ok: false, error: "切换本地源码安装失败", steps, ...syncSnapshot() });
+              nudgeReload();
+              return sendJson(res, 200, { ok: true, mode: "clone", steps, ...syncSnapshot() });
             }
 
             if (!sourceDir) {
-              return sendJson(res, 400, {
-                ok: false,
-                error: `此插件从 ${spec || "git/npm"} 安装，没有本地源码目录，无法同步。请重新安装该 spec 来更新。`,
-                steps,
-                ...syncSnapshot(),
-              });
+              return sendJson(res, 400, { ok: false, error: `此插件从 ${spec || "git/npm"} 安装，没有本地源码目录，无法同步。`, steps, ...syncSnapshot() });
             }
+
+            // Local checkout: pull new plugin commits first, then upstream skills.
+            if (path.resolve(sourceDir) === path.resolve(defaultPluginDir())) await ensureSourceRepo(sourceDir, steps);
 
             const node = resolveBundledNode();
             const script = path.join(sourceDir, "scripts", "sync-upstream.mjs");
@@ -928,6 +1013,7 @@ export function apply(ctx) {
               steps.push({ name: "refresh installed copy", code: 1, output: errorMessage(copyError) });
               return sendJson(res, 500, { ok: false, error: "refresh installed copy failed", steps, ...syncSnapshot() });
             }
+            nudgeReload();
             return sendJson(res, 200, { ok: true, mode: "local", steps, ...syncSnapshot() });
           } catch (error) {
             return sendJson(res, 500, { ok: false, error: errorMessage(error), steps });
