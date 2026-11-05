@@ -1067,3 +1067,7 @@ export function apply(ctx) {
   if (typeof ctx.effect === "function") ctx.effect(() => () => scheduleCleanup(), "dsh-ponytail: source cleanup");
   else if (typeof ctx.on === "function") ctx.on("dispose", scheduleCleanup);
 }
+
+// Exposed for the cleanup self-test only; not part of the plugin API.
+export { dependsOnSelf, removeSourceClone };
+
