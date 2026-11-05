@@ -498,6 +498,42 @@ function nudgeReload() {
   }
 }
 
+function dependsOnSelf() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(profileDir(), "package.json"), "utf8"));
+    for (const k of ["dependencies", "devDependencies", "optionalDependencies"]) {
+      if (pkg && pkg[k] && Object.prototype.hasOwnProperty.call(pkg[k], "dsh-ponytail")) return true;
+    }
+    return false;
+  } catch {
+    return true; // unreadable manifest: assume still installed, never delete
+  }
+}
+
+function removeSourceClone() {
+  const dir = defaultPluginDir();
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    if (!pkg || pkg.name !== "dsh-ponytail") return;
+  } catch { return; }
+  let remote = "";
+  try { remote = fs.readFileSync(path.join(dir, ".git", "config"), "utf8"); } catch { return; }
+  if (!/dsh-ponytail/.test(remote)) return; // only our own git checkout
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* retried next tick */ }
+}
+
+function scheduleSourceCleanup() {
+  // Removal unloads us before `pnpm remove` rewrites package.json, so re-check
+  // for a while; a disable keeps the dependency and leaves the checkout alone.
+  let tries = 0;
+  const tick = () => {
+    tries += 1;
+    if (!dependsOnSelf()) { removeSourceClone(); return; }
+    if (tries < 8) setTimeout(tick, Math.min(tries * 1500, 12000)).unref?.();
+  };
+  setTimeout(tick, 1500).unref?.();
+}
+
 function installedDir() {
   return path.join(profileDir(), "node_modules", "dsh-ponytail");
 }
@@ -1024,4 +1060,10 @@ export function apply(ctx) {
       /* routes already registered, or this host rejects the register call */
     }
   }
+
+  // Removing this plugin should also drop the source checkout it cloned into
+  // DSH_HOME; a disable/unload keeps it (package.json still lists us).
+  const scheduleCleanup = () => scheduleSourceCleanup();
+  if (typeof ctx.effect === "function") ctx.effect(() => () => scheduleCleanup(), "dsh-ponytail: source cleanup");
+  else if (typeof ctx.on === "function") ctx.on("dispose", scheduleCleanup);
 }
