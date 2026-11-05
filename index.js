@@ -445,7 +445,11 @@ function runGit(args, cwd, timeoutMs = 180000) {
     let child;
     let timer = null;
     let timedOut = false;
-    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "echo", CI: "1" };
+    // GUI-launched hosts on macOS often lack Homebrew in PATH; widen it so a
+    // real git is found instead of the Xcode command-line-tools shim.
+    const extraPath = ["/opt/homebrew/bin", "/usr/local/bin"].filter((d) => fs.existsSync(d)).join(path.delimiter);
+    const PATH = [process.env.PATH || "", extraPath].filter(Boolean).join(path.delimiter);
+    const env = { ...process.env, PATH, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "echo", CI: "1" };
     try {
       child = spawn("git", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
@@ -645,8 +649,8 @@ function runNode(nodePath, args, cwd, options = {}) {
 function runPnpm(args, cwd, timeoutMs = 180000) {
   const pnpm = resolvePnpmCjs();
   if (!pnpm) return Promise.resolve({ code: -1, stdout: "", stderr: "pnpm runtime not found" });
-  const extraPath = ["/opt/homebrew/bin", "/usr/local/bin"].filter((d) => fs.existsSync(d)).join(":");
-  const PATH = [process.env.PATH || "", extraPath].filter(Boolean).join(":");
+  const extraPath = ["/opt/homebrew/bin", "/usr/local/bin"].filter((d) => fs.existsSync(d)).join(path.delimiter);
+  const PATH = [process.env.PATH || "", extraPath].filter(Boolean).join(path.delimiter);
   const override = Number(process.env.PONYTAIL_PNPM_TIMEOUT_MS) || timeoutMs;
   // Non-interactive git so a credential / first-run prompt can never hang the
   // pnpm child; PATH is widened so pnpm finds a real git, not the Xcode shim.
