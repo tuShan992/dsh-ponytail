@@ -116,6 +116,26 @@ Alternatively, add the row by hand to the profile's `cordis.patch.yml`:
       name: dsh-ponytail
 ```
 
+### Local checkout vs git/npm install
+
+- **Local checkout (`file:`) — recommended when you want the settings-page
+  button to sync upstream skills.** Clone the repo and install from the path:
+
+  ```sh
+  git clone https://github.com/<you>/dsh-ponytail ~/dsh-ponytail
+  dsh plugin --profile <name> add file:~/dsh-ponytail
+  ```
+
+  The **同步上游并重装 / Sync upstream & reinstall** button then runs
+  `scripts/sync-upstream.mjs` in that checkout (pulling the
+  `@dietrichgebert/ponytail` skills) and mirrors the refreshed files into the
+  installed copy. Keep the directory where it is — the spec points at it.
+- **git/npm install (`github:you/dsh-ponytail`) — for cross-machine
+  distribution.** There is no local checkout; the button **reinstalls the same
+  spec** to pull the latest commit of *your* repo (it does not fetch upstream
+  itself). Update your repo first (`node scripts/sync-upstream.mjs && git
+  push`), then click the button.
+
 ## Syncing upstream
 
 When the upstream ponytail repo publishes a new version, run one script — it
