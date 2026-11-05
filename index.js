@@ -394,19 +394,25 @@ function readPkg(dir) {
  * so the button must update the source and then reinstall — hence we read the
  * source path back out of the profile's dependency spec (`file:/abs/path`).
  */
+function installSpec() {
+  try {
+    const pkg = readPkg(profileDir());
+    const spec = pkg && pkg.dependencies && pkg.dependencies["dsh-ponytail"];
+    return typeof spec === "string" ? spec : null;
+  } catch {
+    return null;
+  }
+}
+
 function resolveSourceDir() {
   if (process.env.PONYTAIL_SOURCE_DIR) return process.env.PONYTAIL_SOURCE_DIR;
-  const profile = profileDir();
-  try {
-    const pkg = readPkg(profile);
-    const spec = pkg && pkg.dependencies && pkg.dependencies["dsh-ponytail"];
-    if (typeof spec === "string") {
-      const ref = spec.startsWith("file:") || spec.startsWith("link:") ? spec.slice(5) : spec;
-      return path.isAbsolute(ref) ? ref : path.resolve(profile, ref);
-    }
-  } catch {
-    /* fall through to the default location */
+  const spec = installSpec();
+  if (spec && (spec.startsWith("file:") || spec.startsWith("link:"))) {
+    const ref = spec.slice(5);
+    return path.isAbsolute(ref) ? ref : path.resolve(profileDir(), ref);
   }
+  // A git/npm install has no local source checkout to sync from.
+  if (spec) return null;
   if (process.env.DSH_HOME) return path.join(process.env.DSH_HOME, "plugins", "dsh-ponytail");
   return path.join(os.homedir(), ".dsh", "plugins", "dsh-ponytail");
 }
@@ -462,16 +468,19 @@ async function latestInfo(installedVersion) {
 function syncSnapshot() {
   const sourceDir = resolveSourceDir();
   const installed = installedDir();
-  const sourcePkg = readPkg(sourceDir);
+  const sourcePkg = sourceDir ? readPkg(sourceDir) : null;
   const installedPkg = readPkg(installed);
+  const script = sourceDir ? path.join(sourceDir, "scripts", "sync-upstream.mjs") : null;
   return {
     sourceDir,
     installedDir: installed,
+    installedSpec: installSpec(),
     sourceVersion: sourcePkg ? sourcePkg.version : null,
     upstreamVersion: sourcePkg && sourcePkg.upstream ? sourcePkg.upstream.version : null,
     installedVersion: installedPkg ? installedPkg.version : null,
     node: resolveBundledNode(),
     pnpm: resolvePnpmCjs() || null,
+    canSync: Boolean(sourceDir && script && fs.existsSync(script)),
   };
 }
 
@@ -775,6 +784,14 @@ export function apply(ctx) {
           }
           try {
             const sourceDir = resolveSourceDir();
+            if (!sourceDir) {
+              const spec = installSpec();
+              return sendJson(res, 400, {
+                ok: false,
+                error: `此插件从 ${spec || "git/npm"} 安装，没有本地源码目录，无法执行 sync-upstream。请卸载后重新安装该 spec 来更新。`,
+                ...syncSnapshot(),
+              });
+            }
             const node = resolveBundledNode();
             const script = path.join(sourceDir, "scripts", "sync-upstream.mjs");
             if (!fs.existsSync(script)) throw new Error(`sync script not found: ${script}`);

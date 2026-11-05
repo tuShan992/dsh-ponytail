@@ -155,6 +155,12 @@ installed copy under the profile's `node_modules` (a direct copy, because
 ruleset — the plugin modules already loaded in the running host are not
 re-imported.
 
+If the plugin was installed from a **git or npm spec** (e.g.
+`github:you/dsh-ponytail`) instead of a local `file:` path, there is no local
+source checkout, so the sync button is disabled and the page reports the install
+spec. Update such an install by reinstalling that spec (`pnpm update
+dsh-ponytail` in the profile), not by syncing from a source directory.
+
 The button and its routes are loopback- and same-origin-gated, because a
 route that runs commands and rewrites the profile is otherwise a remote-code
 execution surface.

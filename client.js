@@ -290,6 +290,7 @@ window.__ModuleLoader__.load({
 
       const ver = (value) => (value === null || value === undefined ? '—' : String(value))
       const steps = result && Array.isArray(result.steps) ? result.steps : []
+      const canSync = Boolean(status && status.canSync)
 
       return h(
         'div',
@@ -309,6 +310,9 @@ window.__ModuleLoader__.load({
             h('span', { style: styles.label }, '最新上游 / Latest'),
             h('span', { style: styles.mono }, ver(status && status.latestVersion))),
           h('div', { style: styles.row },
+            h('span', { style: styles.label }, '安装来源 / Spec'),
+            h('span', { style: styles.mono }, ver(status && status.installedSpec))),
+          h('div', { style: styles.row },
             h('span', { style: styles.label }, '源目录 / Source'),
             h('span', { style: styles.mono }, ver(status && status.sourceDir))),
           h('div', { style: styles.row },
@@ -322,10 +326,10 @@ window.__ModuleLoader__.load({
           'div',
           { style: styles.row },
           h('button', {
-            style: busy ? styles.button : styles.buttonPrimary,
-            disabled: busy,
-            onClick: busy ? undefined : runSync,
-          }, busy ? h('span', null, spinnerIcon(), '同步中… Syncing…') : '同步上游并重装 / Sync upstream & reinstall'),
+            style: busy || !canSync ? styles.button : styles.buttonPrimary,
+            disabled: busy || !canSync,
+            onClick: busy || !canSync ? undefined : runSync,
+          }, busy ? h('span', null, spinnerIcon(), '同步中… Syncing…') : (canSync ? '同步上游并重装 / Sync upstream & reinstall' : '仅本地源码安装可同步 / Local install only')),
           h('button', {
             style: styles.button,
             disabled: busy || refreshing,
@@ -334,7 +338,12 @@ window.__ModuleLoader__.load({
         ),
         status && status.updateAvailable
           ? h('div', { style: styles.update },
-              `⬆ 发现新版本 ${status.latestVersion}（已安装 ${status.installedVersion}）— 点「同步上游并重装」更新。`)
+              canSync
+                ? `⬆ 发现新版本 ${status.latestVersion}（已安装 ${status.installedVersion}）— 点「同步上游并重装」更新。`
+                : `⬆ 发现新版本 ${status.latestVersion}（已安装 ${status.installedVersion}）— 此插件从 git/npm 安装，请用 pnpm 重新安装更新。`)
+          : null,
+        !canSync && status
+          ? h('div', { style: styles.dim }, '当前为 git/npm 安装，没有本地源码目录；更新请在该 profile 里重新安装该插件。')
           : null,
         result && result.ok
           ? h('div', { style: styles.ok }, '✓ 同步完成。请重启 DSH 以加载更新后的技能与规则。Done — restart DSH to load the updated skills and rules.')
