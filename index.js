@@ -340,8 +340,16 @@ function firstExistingFile(candidates) {
 // .../Contents/Resources, next to the bundled node and pnpm. GUI launches do
 // not inherit a shell PATH, so we must use these absolute paths rather than
 // spawning `node`/`pnpm` by name.
+// The bundled node binary is `node.exe` on Windows and `node` elsewhere; asking
+// for the wrong name silently falls through to the extensionless POSIX shim in
+// runtime/bin, which Windows cannot spawn (ENOENT).
+function bundledNodeName() {
+  return process.platform === "win32" ? "node.exe" : "node";
+}
+
 function resourcesDirs() {
   const dirs = [];
+  const nodeName = bundledNodeName();
   if (typeof process.resourcesPath === "string" && process.resourcesPath !== "") dirs.push(process.resourcesPath);
   // Walk up from process.execPath looking for a Contents/Resources that holds
   // the bundled runtime — covers a plain-node host whose execPath is the
@@ -353,7 +361,7 @@ function resourcesDirs() {
     dir = undefined;
   }
   for (let depth = 0; dir && depth < 8; depth += 1) {
-    if (path.basename(dir) === "Resources" && fs.existsSync(path.join(dir, "runtime", "primary-runtime", "dependencies", "node", "bin", "node"))) {
+    if (path.basename(dir) === "Resources" && fs.existsSync(path.join(dir, "runtime", "primary-runtime", "dependencies", "node", "bin", nodeName))) {
       dirs.push(dir);
       break;
     }
@@ -363,10 +371,11 @@ function resourcesDirs() {
 }
 
 function resolveBundledNode() {
+  const nodeName = bundledNodeName();
   const candidates = [process.env.PONYTAIL_NODE];
   for (const dir of resourcesDirs()) {
-    candidates.push(path.join(dir, "runtime", "primary-runtime", "dependencies", "node", "bin", "node"));
-    candidates.push(path.join(dir, "runtime", "bin", "node"));
+    candidates.push(path.join(dir, "runtime", "primary-runtime", "dependencies", "node", "bin", nodeName));
+    candidates.push(path.join(dir, "runtime", "bin", nodeName));
   }
   return firstExistingFile(candidates) || "node";
 }
