@@ -265,6 +265,17 @@ function getSkillBody(skillName) {
   return skillCache.get(skillName);
 }
 
+// Start a real model turn from a command (same mechanism /plan uses), so the
+// answer lands in the chat like any other skill instead of a command-only stub.
+export function startQuestionTurn(agent, question, makeMessage) {
+  if (!makeMessage || !agent || typeof agent.steer !== "function") return false;
+  agent.steer(makeMessage({
+    content: [{ type: "text", text: question }],
+    source: { kind: "user" },
+  }));
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Ruleset builder (mirrors upstream hooks/ponytail-instructions.js)
 // ---------------------------------------------------------------------------
@@ -952,6 +963,7 @@ export function apply(ctx) {
     name: "ponytail",
     description: "Set ponytail intensity for this session: lite, full, ultra, or off.",
     input: { hint: "[lite|full|ultra|off]" },
+    recordInput: false,
     handler: ({ agent, rawInput } = {}) => {
       const arg = typeof rawInput === "string" ? rawInput.trim().toLowerCase() : "";
       const sessionId = agent && agent.session ? agent.session.id : undefined;
@@ -966,8 +978,12 @@ export function apply(ctx) {
       }
       const mode = normalizeMode(arg);
       if (!mode) {
-        // `/ponytail <question>` is not a mode: show the skill card, like the
-        // other skill commands, instead of answering with the mode line.
+        // `/ponytail <question>` is not a mode: answer it in the chat like the
+        // other skill commands, without changing the level.
+        const question = typeof rawInput === "string" ? rawInput.trim() : "";
+        if (question && startQuestionTurn(agent, question, createUserMessage)) {
+          return { kind: "success" };
+        }
         try {
           return { kind: "success", text: getSkillBody("ponytail") };
         } catch (error) {
