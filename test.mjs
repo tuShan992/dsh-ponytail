@@ -66,8 +66,8 @@ check("ponytail-help returns the card text", helpCard.kind === "success" && help
 const reviewCmd = commands["ponytail-review"].handler({ agent: { session: { id: "s-r" } } });
 check("ponytail-review without followup returns error (mock)", reviewCmd.kind === "error");
 let steered;
-const started = mod.startQuestionTurn({ steer: (m) => { steered = m; } }, "what is ponytail", (input) => input);
-check("question starts a model turn", started === true && steered.content[0].text === "what is ponytail" && steered.source.kind === "user");
+const started = mod.startQuestionTurn({ steer: (m) => { steered = m; } }, "/ponytail what is ponytail", (input) => input);
+check("question starts a model turn", started === true && steered.content[0].text.startsWith("/ponytail ") && steered.source.kind === "user");
 check("question turn needs steer()", mod.startQuestionTurn({}, "q", (input) => input) === false);
 
 // ---- system prompt / levels ---------------------------------------------

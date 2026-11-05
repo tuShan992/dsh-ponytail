@@ -265,12 +265,13 @@ function getSkillBody(skillName) {
   return skillCache.get(skillName);
 }
 
-// Start a real model turn from a command (same mechanism /plan uses), so the
-// answer lands in the chat like any other skill instead of a command-only stub.
-export function startQuestionTurn(agent, question, makeMessage) {
+// Start a real model turn from a command (same mechanism /plan uses). The text
+// keeps the leading `/ponytail`, so the host's skill scanner injects the
+// ponytail instructions and shows the same blue skill badge as other skills.
+export function startQuestionTurn(agent, text, makeMessage) {
   if (!makeMessage || !agent || typeof agent.steer !== "function") return false;
   agent.steer(makeMessage({
-    content: [{ type: "text", text: question }],
+    content: [{ type: "text", text }],
     source: { kind: "user" },
   }));
   return true;
@@ -981,7 +982,7 @@ export function apply(ctx) {
         // `/ponytail <question>` is not a mode: answer it in the chat like the
         // other skill commands, without changing the level.
         const question = typeof rawInput === "string" ? rawInput.trim() : "";
-        if (question && startQuestionTurn(agent, question, createUserMessage)) {
+        if (question && startQuestionTurn(agent, `/ponytail ${question}`, createUserMessage)) {
           return { kind: "success" };
         }
         try {
