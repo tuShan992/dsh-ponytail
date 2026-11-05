@@ -156,10 +156,11 @@ ruleset — the plugin modules already loaded in the running host are not
 re-imported.
 
 If the plugin was installed from a **git or npm spec** (e.g.
-`github:you/dsh-ponytail`) instead of a local `file:` path, there is no local
-source checkout, so the sync button is disabled and the page reports the install
-spec. Update such an install by reinstalling that spec (`pnpm update
-dsh-ponytail` in the profile), not by syncing from a source directory.
+`github:you/dsh-ponytail`) there is no local source checkout; the button then
+**reinstalls the same spec** (`pnpm remove` + `pnpm add <spec>`) to pull the
+latest commit. The profile's `package.json`/lockfile and the installed copy are
+backed up first and restored if the reinstall fails, so a broken network never
+leaves the plugin uninstalled.
 
 The button and its routes are loopback- and same-origin-gated, because a
 route that runs commands and rewrites the profile is otherwise a remote-code

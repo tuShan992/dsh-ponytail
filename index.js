@@ -471,16 +471,25 @@ function syncSnapshot() {
   const sourcePkg = sourceDir ? readPkg(sourceDir) : null;
   const installedPkg = readPkg(installed);
   const script = sourceDir ? path.join(sourceDir, "scripts", "sync-upstream.mjs") : null;
+  const spec = installSpec();
+  const isLocalSpec = Boolean(spec && (spec.startsWith("file:") || spec.startsWith("link:")));
+  const hasLocalSource = Boolean(sourceDir && script && fs.existsSync(script));
+  // "local" = edit the source tree then mirror it; "reinstall" = git/npm install,
+  // re-run pnpm against the same spec; "none" = nothing we can do.
+  const syncMode = hasLocalSource ? "local" : spec && !isLocalSpec ? "reinstall" : "none";
+  const sourceUpstream = sourcePkg && sourcePkg.upstream ? sourcePkg.upstream.version : null;
+  const installedUpstream = installedPkg && installedPkg.upstream ? installedPkg.upstream.version : null;
   return {
     sourceDir,
     installedDir: installed,
-    installedSpec: installSpec(),
+    installedSpec: spec,
     sourceVersion: sourcePkg ? sourcePkg.version : null,
-    upstreamVersion: sourcePkg && sourcePkg.upstream ? sourcePkg.upstream.version : null,
+    upstreamVersion: sourceUpstream || installedUpstream,
     installedVersion: installedPkg ? installedPkg.version : null,
     node: resolveBundledNode(),
     pnpm: resolvePnpmCjs() || null,
-    canSync: Boolean(sourceDir && script && fs.existsSync(script)),
+    canSync: hasLocalSource || syncMode === "reinstall",
+    syncMode,
   };
 }
 
@@ -500,6 +509,68 @@ function runNode(nodePath, args, cwd) {
     child.on("error", (error) => resolve({ code: -1, stdout, stderr: stderr + errorMessage(error) }));
     child.on("close", (code) => resolve({ code: code == null ? -1 : code, stdout, stderr }));
   });
+}
+
+function runPnpm(args, cwd) {
+  const pnpm = resolvePnpmCjs();
+  if (!pnpm) return Promise.resolve({ code: -1, stdout: "", stderr: "pnpm runtime not found" });
+  return runNode(resolveBundledNode(), [pnpm, ...args], cwd);
+}
+
+// Snapshot the files `pnpm remove/add` rewrites, so a failed update can be
+// rolled back to a working install instead of leaving the plugin uninstalled.
+function backupProfile() {
+  const profile = profileDir();
+  const backup = path.join(profile, ".ponytail-backup");
+  fs.rmSync(backup, { recursive: true, force: true });
+  fs.mkdirSync(backup, { recursive: true });
+  for (const file of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]) {
+    const src = path.join(profile, file);
+    if (fs.existsSync(src)) fs.cpSync(src, path.join(backup, file));
+  }
+  const inst = installedDir();
+  if (fs.existsSync(inst)) fs.cpSync(inst, path.join(backup, "installed"), { recursive: true });
+  return backup;
+}
+
+function restoreProfile(backup) {
+  const profile = profileDir();
+  for (const file of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]) {
+    const src = path.join(backup, file);
+    if (fs.existsSync(src)) fs.cpSync(src, path.join(profile, file), { force: true });
+  }
+  const inst = installedDir();
+  const saved = path.join(backup, "installed");
+  if (fs.existsSync(saved)) {
+    fs.rmSync(inst, { recursive: true, force: true });
+    fs.cpSync(saved, inst, { recursive: true });
+  }
+  fs.rmSync(backup, { recursive: true, force: true });
+}
+
+// Reinstall a git/npm-installed plugin from its own dependency spec: this is
+// how such an install picks up a newer commit. Backed up first and rolled back
+// on any failure, so a broken network never leaves the plugin uninstalled.
+async function reinstallFromSpec(spec, steps) {
+  const profile = profileDir();
+  const backup = backupProfile();
+  try {
+    const removed = await runPnpm(["remove", "dsh-ponytail"], profile);
+    steps.push({ name: "pnpm remove dsh-ponytail", code: removed.code, output: (removed.stdout + removed.stderr).trim().slice(-2000) });
+    if (removed.code !== 0) throw new Error("pnpm remove dsh-ponytail failed");
+
+    const added = await runPnpm(["add", spec], profile);
+    steps.push({ name: `pnpm add ${spec}`, code: added.code, output: (added.stdout + added.stderr).trim().slice(-2000) });
+    if (added.code !== 0) throw new Error(`pnpm add ${spec} failed`);
+    if (!fs.existsSync(path.join(installedDir(), "package.json"))) throw new Error("installed copy missing after reinstall");
+
+    fs.rmSync(backup, { recursive: true, force: true });
+    return { ok: true };
+  } catch (error) {
+    restoreProfile(backup);
+    steps.push({ name: "rollback", code: 0, output: `已恢复原安装 / restored previous install: ${errorMessage(error)}` });
+    return { ok: false, error: errorMessage(error) };
+  }
 }
 
 // `pnpm install` does NOT refresh a `file:` dependency whose version did not
@@ -782,21 +853,36 @@ export function apply(ctx) {
           if (!isSameOriginMutation(req)) {
             return sendJson(res, 403, { error: "sync requires a same-origin browser request" });
           }
+          const steps = [];
           try {
             const sourceDir = resolveSourceDir();
+            const spec = installSpec();
+            const isLocalSpec = Boolean(spec && (spec.startsWith("file:") || spec.startsWith("link:")));
+
+            // git/npm install: no local source tree. Reinstall the same spec to
+            // pull the latest commit (backed up + rolled back on failure).
+            if (!sourceDir && spec && !isLocalSpec) {
+              if (!resolvePnpmCjs()) {
+                return sendJson(res, 500, { ok: false, error: "pnpm 运行时未找到，无法重新安装 git/npm 安装。", steps, ...syncSnapshot() });
+              }
+              const result = await reinstallFromSpec(spec, steps);
+              if (!result.ok) return sendJson(res, 500, { ok: false, error: result.error, steps, ...syncSnapshot() });
+              return sendJson(res, 200, { ok: true, mode: "reinstall", steps, ...syncSnapshot() });
+            }
+
             if (!sourceDir) {
-              const spec = installSpec();
               return sendJson(res, 400, {
                 ok: false,
-                error: `此插件从 ${spec || "git/npm"} 安装，没有本地源码目录，无法执行 sync-upstream。请卸载后重新安装该 spec 来更新。`,
+                error: `此插件从 ${spec || "git/npm"} 安装，没有本地源码目录，无法同步。请重新安装该 spec 来更新。`,
+                steps,
                 ...syncSnapshot(),
               });
             }
+
             const node = resolveBundledNode();
             const script = path.join(sourceDir, "scripts", "sync-upstream.mjs");
             if (!fs.existsSync(script)) throw new Error(`sync script not found: ${script}`);
 
-            const steps = [];
             const synced = await runNode(node, [script], sourceDir);
             steps.push({ name: "sync-upstream", code: synced.code, output: (synced.stdout + synced.stderr).trim().slice(-4000) });
             if (synced.code !== 0) {
@@ -811,9 +897,9 @@ export function apply(ctx) {
               steps.push({ name: "refresh installed copy", code: 1, output: errorMessage(copyError) });
               return sendJson(res, 500, { ok: false, error: "refresh installed copy failed", steps, ...syncSnapshot() });
             }
-            return sendJson(res, 200, { ok: true, steps, ...syncSnapshot() });
+            return sendJson(res, 200, { ok: true, mode: "local", steps, ...syncSnapshot() });
           } catch (error) {
-            return sendJson(res, 500, { ok: false, error: errorMessage(error) });
+            return sendJson(res, 500, { ok: false, error: errorMessage(error), steps });
           }
         },
       }), "dsh-ponytail: sync route");

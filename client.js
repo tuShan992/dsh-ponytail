@@ -291,6 +291,12 @@ window.__ModuleLoader__.load({
       const ver = (value) => (value === null || value === undefined ? '—' : String(value))
       const steps = result && Array.isArray(result.steps) ? result.steps : []
       const canSync = Boolean(status && status.canSync)
+      const syncMode = status && status.syncMode
+      const syncLabel = !canSync
+        ? '仅本地源码安装可同步 / Local install only'
+        : syncMode === 'reinstall'
+          ? '重新安装更新 / Reinstall to update'
+          : '同步上游并重装 / Sync upstream & reinstall'
 
       return h(
         'div',
@@ -329,7 +335,7 @@ window.__ModuleLoader__.load({
             style: busy || !canSync ? styles.button : styles.buttonPrimary,
             disabled: busy || !canSync,
             onClick: busy || !canSync ? undefined : runSync,
-          }, busy ? h('span', null, spinnerIcon(), '同步中… Syncing…') : (canSync ? '同步上游并重装 / Sync upstream & reinstall' : '仅本地源码安装可同步 / Local install only')),
+          }, busy ? h('span', null, spinnerIcon(), syncMode === 'reinstall' ? '重装中… Reinstalling…' : '同步中… Syncing…') : syncLabel),
           h('button', {
             style: styles.button,
             disabled: busy || refreshing,
@@ -338,12 +344,13 @@ window.__ModuleLoader__.load({
         ),
         status && status.updateAvailable
           ? h('div', { style: styles.update },
-              canSync
-                ? `⬆ 发现新版本 ${status.latestVersion}（已安装 ${status.installedVersion}）— 点「同步上游并重装」更新。`
-                : `⬆ 发现新版本 ${status.latestVersion}（已安装 ${status.installedVersion}）— 此插件从 git/npm 安装，请用 pnpm 重新安装更新。`)
+              `⬆ 发现新版本 ${status.latestVersion}（已安装 ${status.installedVersion}）— ${canSync ? '点下方按钮更新。' : '请重新安装该插件。'}`)
           : null,
-        !canSync && status
-          ? h('div', { style: styles.dim }, '当前为 git/npm 安装，没有本地源码目录；更新请在该 profile 里重新安装该插件。')
+        status && !canSync
+          ? h('div', { style: styles.dim }, '当前为本地源码安装，但找不到源码目录，无法同步。')
+          : null,
+        status && syncMode === 'reinstall'
+          ? h('div', { style: styles.dim }, `将从 ${status.installedSpec} 重新安装以获取最新提交（失败会自动回滚）。Reinstalls from the spec; rolled back on failure.`)
           : null,
         result && result.ok
           ? h('div', { style: styles.ok }, '✓ 同步完成。请重启 DSH 以加载更新后的技能与规则。Done — restart DSH to load the updated skills and rules.')
