@@ -176,11 +176,15 @@ ruleset — the plugin modules already loaded in the running host are not
 re-imported.
 
 If the plugin was installed from a **git or npm spec** (e.g.
-`github:you/dsh-ponytail`) there is no local source checkout; the button then
-**reinstalls the same spec** (`pnpm remove` + `pnpm add <spec>`) to pull the
-latest commit. The profile's `package.json`/lockfile and the installed copy are
-backed up first and restored if the reinstall fails, so a broken network never
-leaves the plugin uninstalled.
+`github:you/dsh-ponytail`) there is no local source checkout. The button then
+clones the repository into `<DSH_HOME>/plugins/dsh-ponytail` (default
+`~/.dsh/plugins/dsh-ponytail`) and switches the install to that local `file:`
+spec. The checkout is **materialized without `.git`** — it is generated output
+refreshed on every sync, not a working repository — and its origin is recorded
+in `.ponytail-source.json` so later syncs can fetch the latest commit again.
+The profile's `package.json`/lockfile and the installed copy are backed up first
+and restored if the reinstall fails, so a broken network never leaves the plugin
+uninstalled. Uninstalling the plugin deletes this checkout again.
 
 The button and its routes are loopback- and same-origin-gated, because a
 route that runs commands and rewrites the profile is otherwise a remote-code

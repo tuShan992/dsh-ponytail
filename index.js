@@ -469,27 +469,58 @@ function runGit(args, cwd, timeoutMs = 180000) {
   });
 }
 
+function sourceMetaPath(dir) {
+  return path.join(dir, ".ponytail-source.json");
+}
+
+function readSourceMeta(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(sourceMetaPath(dir), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeSourceMeta(dir, origin) {
+  try {
+    fs.writeFileSync(sourceMetaPath(dir), JSON.stringify({ name: "dsh-ponytail", origin, at: new Date().toISOString() }));
+  } catch {
+    /* best effort */
+  }
+}
+
 // Materialize or refresh the plugin's source checkout under DSH_HOME, so the
 // sync button clones it locally instead of depending on an external directory.
+// The checkout keeps no `.git`: it is generated output, replaced on every sync.
 async function ensureSourceRepo(dir, steps) {
-  const url = process.env.PONYTAIL_GIT_URL || gitUrlFromSpec(installSpec());
-  if (!fs.existsSync(path.join(dir, "package.json"))) {
-    if (!url) return { ok: false, error: "no local checkout and no git url to clone" };
-    fs.mkdirSync(path.dirname(dir), { recursive: true });
-    const r = await runGit(["clone", "--depth", "1", url, dir], path.dirname(dir));
-    steps.push({ name: `git clone ${url}`, code: r.code, output: (r.stdout + r.stderr).trim().slice(-2000) });
-    return { ok: r.code === 0, error: r.code === 0 ? undefined : "git clone failed" };
+  const meta = readSourceMeta(dir);
+  const url = process.env.PONYTAIL_GIT_URL || gitUrlFromSpec(installSpec()) || (meta && meta.origin) || null;
+  if (!url) {
+    if (fs.existsSync(path.join(dir, "package.json"))) return { ok: true };
+    return { ok: false, error: "no local checkout and no upstream url to clone" };
   }
-  if (fs.existsSync(path.join(dir, ".git"))) {
-    let f = await runGit(["-C", dir, "fetch", "--depth", "1", "origin"], dir);
-    if (f.code !== 0 && url) f = await runGit(["-C", dir, "fetch", "--depth", "1", url, "HEAD"], dir);
-    if (f.code === 0) {
-      const rr = await runGit(["-C", dir, "reset", "--hard", "FETCH_HEAD"], dir);
-      steps.push({ name: "git fetch + reset", code: rr.code, output: (f.stdout + f.stderr + rr.stdout + rr.stderr).trim().slice(-2000) });
-    } else {
-      steps.push({ name: "git fetch", code: f.code, output: (f.stdout + f.stderr).trim().slice(-1000) });
-    }
+  const parent = path.dirname(dir);
+  fs.mkdirSync(parent, { recursive: true });
+  const tmp = path.join(parent, `.dsh-ponytail-${process.pid}-${Date.now()}`);
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  const r = await runGit(["clone", "--depth", "1", url, tmp], parent);
+  steps.push({ name: `git clone ${url}`, code: r.code, output: (r.stdout + r.stderr).trim().slice(-2000) });
+  if (r.code !== 0) {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    return { ok: false, error: "git clone failed" };
   }
+  try { fs.rmSync(path.join(tmp, ".git"), { recursive: true, force: true }); } catch { /* ignore */ }
+  writeSourceMeta(tmp, url);
+  try {
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    fs.renameSync(tmp, dir);
+  } catch {
+    // Target could not be replaced atomically: copy over it instead.
+    fs.cpSync(tmp, dir, { recursive: true, force: true });
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    writeSourceMeta(dir, url);
+  }
+  steps.push({ name: "materialized source (no .git)", code: 0, output: dir });
   return { ok: true };
 }
 
@@ -520,15 +551,43 @@ function removeSourceClone() {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
     if (!pkg || pkg.name !== "dsh-ponytail") return;
   } catch { return; }
-  let remote = "";
-  try { remote = fs.readFileSync(path.join(dir, ".git", "config"), "utf8"); } catch { return; }
-  if (!/dsh-ponytail/.test(remote)) return; // only our own git checkout
+  // Only delete a checkout we materialized ourselves (marker present); never a
+  // user's own directory that merely happens to sit at the same path.
+  const meta = readSourceMeta(dir);
+  if (!meta || meta.name !== "dsh-ponytail") return;
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* retried next tick */ }
 }
 
+// Worker script run in a detached node process. The host may restart right
+// after `pnpm remove`, which kills timers owned by the plugin, so the janitor
+// must outlive the plugin process to actually delete the checkout.
+function cleanupWorkerCode() {
+  return [
+    'const fs=require("fs"),path=require("path");',
+    'const dir=process.env.PT_DIR,prof=process.env.PT_PROFILE;',
+    'const installed=()=>{try{const p=JSON.parse(fs.readFileSync(path.join(prof,"package.json"),"utf8"));',
+    'const d=Object.assign({},p.dependencies,p.devDependencies,p.optionalDependencies);',
+    'return Object.prototype.hasOwnProperty.call(d,"dsh-ponytail");}catch{return true;}};',
+    'const mine=()=>{try{if(JSON.parse(fs.readFileSync(path.join(dir,"package.json"),"utf8")).name!=="dsh-ponytail")return false;}catch{return false;}',
+    'try{const m=JSON.parse(fs.readFileSync(path.join(dir,".ponytail-source.json"),"utf8"));return m&&m.name==="dsh-ponytail";}catch{return false;}};',
+    'const end=Date.now()+120000;',
+    'const tick=()=>{if(!installed()&&mine()){try{fs.rmSync(dir,{recursive:true,force:true});}catch{}}if(Date.now()<end)setTimeout(tick,1000);};',
+    'setTimeout(tick,800);',
+  ].join("");
+}
+
 function scheduleSourceCleanup() {
-  // Removal unloads us before `pnpm remove` rewrites package.json, so re-check
-  // for a while; a disable keeps the dependency and leaves the checkout alone.
+  // Start the detached janitor first so it survives a host restart, then also
+  // retry in-process for the common case where the app stays up.
+  try {
+    const child = spawn(resolveBundledNode(), ["-e", cleanupWorkerCode()], {
+      env: { ...process.env, PT_DIR: defaultPluginDir(), PT_PROFILE: profileDir() },
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.unref();
+  } catch { /* in-process retries below still run */ }
   let tries = 0;
   const tick = () => {
     tries += 1;
@@ -1072,6 +1131,6 @@ export function apply(ctx) {
   else if (typeof ctx.on === "function") ctx.on("dispose", scheduleCleanup);
 }
 
-// Exposed for the cleanup self-test only; not part of the plugin API.
-export { dependsOnSelf, removeSourceClone };
+// Exposed for the cleanup/source self-tests only; not part of the plugin API.
+export { dependsOnSelf, removeSourceClone, ensureSourceRepo };
 
