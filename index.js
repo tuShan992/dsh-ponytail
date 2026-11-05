@@ -45,6 +45,12 @@ try {
   /* standalone / test environment */
 }
 
+// Test hook: lets the standalone test exercise the command handlers without
+// a full DSH install. The real host always provides createUserMessage.
+export function __setUserMessageFactory(factory) {
+  createUserMessage = factory;
+}
+
 // ---------------------------------------------------------------------------
 // Modes
 // ---------------------------------------------------------------------------
@@ -1038,11 +1044,11 @@ export function apply(ctx) {
   }
 
   registerSkillCommand("ponytail-review", "ponytail-review",
-    "Use the `ponytail-review` skill to review the current changes.");
+    "/ponytail-review Review the current changes.");
   registerSkillCommand("ponytail-audit", "ponytail-audit",
-    "Use the `ponytail-audit` skill to audit this repository.");
+    "/ponytail-audit Audit this repository.");
   registerSkillCommand("ponytail-debt", "ponytail-debt",
-    "Use the `ponytail-debt` skill to produce the shortcut debt ledger.");
+    "/ponytail-debt Produce the shortcut debt ledger.");
   registerCardCommand("ponytail-help", "ponytail-help");
   registerCardCommand("ponytail-gain", "ponytail-gain");
 

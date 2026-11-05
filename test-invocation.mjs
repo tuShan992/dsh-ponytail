@@ -37,10 +37,11 @@ function invokedSkillNames(messages) {
 
 // ---- skill bodies exist for every ponytail-* skill ------------------------
 let provider;
+const commands = new Map();
 mod.apply({
   skills: { registerProvider: (fn) => { provider = fn(); } },
   systemPrompt: { section: () => {} },
-  commands: { register: () => {} },
+  commands: { register: (cmd) => { commands.set(cmd.name, cmd); } },
   on: () => {},
 });
 const skills = await provider.list();
@@ -69,6 +70,26 @@ for (const name of ["ponytail-review", "ponytail-audit", "ponytail-debt"]) {
   const msg = { source: { kind: "user" }, content: [{ type: "text", text: `/${name} 当前改动` }] };
   check(`host scanner sees ${name}`, invokedSkillNames([msg]).includes(name));
 }
+
+// ---- every working command actually starts a turn carrying its gesture ----
+mod.__setUserMessageFactory((input) => ({ role: "user", ...input }));
+for (const name of ["ponytail-review", "ponytail-audit", "ponytail-debt"]) {
+  let followed;
+  const result = commands.get(name).handler({
+    agent: { session: { id: "s-test" }, followup: (m) => { followed = m; } },
+  });
+  check(`${name} command starts a turn`, result.kind === "success");
+  check(`${name} kickoff keeps the gesture`, followed?.content?.[0]?.text.startsWith(`/${name} `));
+  check(`${name} turn triggers the skill badge`, invokedSkillNames([followed]).includes(name));
+}
+
+let questionTurn;
+const ask = commands.get("ponytail").handler({
+  agent: { session: { id: "s-ask" }, steer: (m) => { questionTurn = m; } },
+  rawInput: "这个技能的作用是什么",
+});
+check("ponytail question starts a turn", ask.kind === "success");
+check("ponytail question keeps /ponytail", questionTurn?.content?.[0]?.text === "/ponytail 这个技能的作用是什么");
 
 // ---- no false positives ---------------------------------------------------
 check("path /usr/bin is not a gesture", invokedSkillNames([{ source: { kind: "user" }, content: [{ type: "text", text: "/usr/bin/node" }] }]).length === 0);
