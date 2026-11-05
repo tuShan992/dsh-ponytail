@@ -335,7 +335,7 @@ window.__ModuleLoader__.load({
             style: busy || !canSync ? styles.button : styles.buttonPrimary,
             disabled: busy || !canSync,
             onClick: busy || !canSync ? undefined : runSync,
-          }, busy ? h('span', null, spinnerIcon(), syncMode === 'reinstall' ? '重装中… Reinstalling…' : '同步中… Syncing…') : syncLabel),
+          }, busy ? h('span', null, spinnerIcon(), syncMode === 'reinstall' ? '重装中（从 GitHub 拉取，可能需 1–2 分钟）… Reinstalling…' : '同步中… Syncing…') : syncLabel),
           h('button', {
             style: styles.button,
             disabled: busy || refreshing,

@@ -493,28 +493,50 @@ function syncSnapshot() {
   };
 }
 
-function runNode(nodePath, args, cwd) {
+function runNode(nodePath, args, cwd, options = {}) {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let child;
+    let timer = null;
+    let timedOut = false;
+    const env = { ...process.env, ...(options.env || {}) };
     try {
-      child = spawn(nodePath, args, { cwd, env: process.env });
+      // stdin ignored so a child that reads input cannot block forever.
+      child = spawn(nodePath, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
-      resolve({ code: -1, stdout, stderr: errorMessage(error) });
+      resolve({ code: -1, stdout, stderr: errorMessage(error), timedOut });
       return;
+    }
+    if (options.timeoutMs) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      }, options.timeoutMs);
     }
     if (child.stdout) child.stdout.on("data", (chunk) => { stdout += chunk; });
     if (child.stderr) child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => resolve({ code: -1, stdout, stderr: stderr + errorMessage(error) }));
-    child.on("close", (code) => resolve({ code: code == null ? -1 : code, stdout, stderr }));
+    child.on("error", (error) => { if (timer) clearTimeout(timer); resolve({ code: -1, stdout, stderr: stderr + errorMessage(error), timedOut }); });
+    child.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      if (timedOut) stderr += `\n[timed out after ${Math.round((options.timeoutMs || 0) / 1000)}s]`;
+      resolve({ code: code == null ? -1 : code, stdout, stderr, timedOut });
+    });
   });
 }
 
-function runPnpm(args, cwd) {
+function runPnpm(args, cwd, timeoutMs = 180000) {
   const pnpm = resolvePnpmCjs();
   if (!pnpm) return Promise.resolve({ code: -1, stdout: "", stderr: "pnpm runtime not found" });
-  return runNode(resolveBundledNode(), [pnpm, ...args], cwd);
+  const extraPath = ["/opt/homebrew/bin", "/usr/local/bin"].filter((d) => fs.existsSync(d)).join(":");
+  const PATH = [process.env.PATH || "", extraPath].filter(Boolean).join(":");
+  const override = Number(process.env.PONYTAIL_PNPM_TIMEOUT_MS) || timeoutMs;
+  // Non-interactive git so a credential / first-run prompt can never hang the
+  // pnpm child; PATH is widened so pnpm finds a real git, not the Xcode shim.
+  return runNode(resolveBundledNode(), [pnpm, ...args], cwd, {
+    timeoutMs: override,
+    env: { PATH, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "echo", CI: "1", NO_COLOR: "1" },
+  });
 }
 
 // Snapshot the files `pnpm remove/add` rewrites, so a failed update can be
@@ -555,13 +577,13 @@ async function reinstallFromSpec(spec, steps) {
   const profile = profileDir();
   const backup = backupProfile();
   try {
-    const removed = await runPnpm(["remove", "dsh-ponytail"], profile);
+    const removed = await runPnpm(["remove", "dsh-ponytail"], profile, 60000);
     steps.push({ name: "pnpm remove dsh-ponytail", code: removed.code, output: (removed.stdout + removed.stderr).trim().slice(-2000) });
     if (removed.code !== 0) throw new Error("pnpm remove dsh-ponytail failed");
 
-    const added = await runPnpm(["add", spec], profile);
+    const added = await runPnpm(["add", spec], profile, 240000);
     steps.push({ name: `pnpm add ${spec}`, code: added.code, output: (added.stdout + added.stderr).trim().slice(-2000) });
-    if (added.code !== 0) throw new Error(`pnpm add ${spec} failed`);
+    if (added.code !== 0) throw new Error(added.timedOut ? `pnpm add ${spec} 超时（从 GitHub 拉取过慢或网络不通）` : `pnpm add ${spec} failed`);
     if (!fs.existsSync(path.join(installedDir(), "package.json"))) throw new Error("installed copy missing after reinstall");
 
     fs.rmSync(backup, { recursive: true, force: true });
@@ -883,7 +905,7 @@ export function apply(ctx) {
             const script = path.join(sourceDir, "scripts", "sync-upstream.mjs");
             if (!fs.existsSync(script)) throw new Error(`sync script not found: ${script}`);
 
-            const synced = await runNode(node, [script], sourceDir);
+            const synced = await runNode(node, [script], sourceDir, { timeoutMs: 180000 });
             steps.push({ name: "sync-upstream", code: synced.code, output: (synced.stdout + synced.stderr).trim().slice(-4000) });
             if (synced.code !== 0) {
               return sendJson(res, 500, { ok: false, error: "sync-upstream failed", steps, ...syncSnapshot() });
