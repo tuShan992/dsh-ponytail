@@ -76,7 +76,7 @@ mod.__setUserMessageFactory((input) => ({ role: "user", ...input }));
 for (const name of ["ponytail-review", "ponytail-audit", "ponytail-debt"]) {
   let followed;
   const result = commands.get(name).handler({
-    agent: { session: { id: "s-test" }, followup: (m) => { followed = m; } },
+    agent: { session: { id: "s-test" }, steer: (m) => { followed = m; } },
   });
   check(`${name} command starts a turn`, result.kind === "success");
   check(`${name} kickoff keeps the gesture`, followed?.content?.[0]?.text.startsWith(`/${name} `));

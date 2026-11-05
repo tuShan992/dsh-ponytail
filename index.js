@@ -1024,17 +1024,16 @@ export function apply(ctx) {
       name: commandName,
       description: `Run the ${skillName} skill on the current work.`,
       handler: ({ agent } = {}) => {
-        if (!createUserMessage || !agent || typeof agent.followup !== "function") {
+        if (!createUserMessage || !agent || typeof agent.steer !== "function") {
           return {
             kind: "error",
             text: `This host cannot start a model turn from a command; ask the model to use the ${skillName} skill instead.`,
           };
         }
         try {
-          agent.followup(createUserMessage({
-            content: [{ type: "text", text: kickoff }],
-            source: { kind: "user" },
-          }));
+          if (!startQuestionTurn(agent, kickoff, createUserMessage)) {
+            throw new Error("host did not accept the turn");
+          }
           return { kind: "success", text: `Running ${skillName}…` };
         } catch (error) {
           return { kind: "error", text: `Could not start ${skillName}: ${error.message}` };
