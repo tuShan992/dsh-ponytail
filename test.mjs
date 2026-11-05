@@ -90,8 +90,9 @@ check("command switches ultra", textFor("s-lite").includes("level: ultra"));
 command.handler({ agent: { session: { id: "s-lite" } }, rawInput: "off" });
 check("command off yields empty section", textFor("s-lite") === "");
 
-const bad = command.handler({ agent: { session: { id: "s-lite" } }, rawInput: "banana" });
-check("unknown mode returns error", bad.kind === "error");
+command.handler({ agent: { session: { id: "s-bad" } }, rawInput: "lite" });
+const bad = command.handler({ agent: { session: { id: "s-bad" } }, rawInput: "banana" });
+check("unknown input keeps mode without error", bad.kind === "success" && textFor("s-bad").includes("level: lite"));
 
 command.handler({ agent: { session: { id: "s-bare" } }, rawInput: "" });
 check("bare /ponytail activates full", textFor("s-bare").includes("level: full"));

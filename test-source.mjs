@@ -26,8 +26,12 @@ ok(!fs.existsSync(path.join(dir, '.git')), 'checkout has no .git');
 const meta = JSON.parse(fs.readFileSync(path.join(dir, '.ponytail-source.json'), 'utf8'));
 ok(meta.name === 'dsh-ponytail' && /dsh-ponytail/.test(meta.origin), 'marker records origin');
 
+fs.mkdirSync(path.join(dir, '.git', 'objects', 'pack'), { recursive: true });
+const stalePack = path.join(dir, '.git', 'objects', 'pack', 'stale.pack');
+fs.writeFileSync(stalePack, 'x');
+fs.chmodSync(stalePack, 0o444);
 const again = await mod.ensureSourceRepo(dir, []);
-ok(again.ok === true && !fs.existsSync(path.join(dir, '.git')), 'refresh keeps no .git');
+ok(again.ok === true && !fs.existsSync(path.join(dir, '.git')), 'refresh removes a stale .git');
 
 fs.rmSync(root, { recursive: true, force: true });
 if (fails) { console.error(fails + ' FAILED'); process.exit(1); }

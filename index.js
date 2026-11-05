@@ -489,6 +489,25 @@ function writeSourceMeta(dir, origin) {
   }
 }
 
+// fs.rmSync leaves read-only files behind on Windows (git pack files are read-only).
+function rmrf(target) {
+  const clear = (p) => {
+    let stat;
+    try { stat = fs.lstatSync(p); } catch { return; }
+    if (stat.isDirectory()) {
+      try { fs.chmodSync(p, 0o777); } catch { /* ignore */ }
+      let entries = [];
+      try { entries = fs.readdirSync(p); } catch { /* ignore */ }
+      for (const entry of entries) clear(path.join(p, entry));
+    } else {
+      try { fs.chmodSync(p, 0o666); } catch { /* ignore */ }
+    }
+  };
+  try { fs.rmSync(target, { recursive: true, force: true }); return; } catch { /* retry below */ }
+  clear(target);
+  try { fs.rmSync(target, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
 // Materialize or refresh the plugin's source checkout under DSH_HOME, so the
 // sync button clones it locally instead of depending on an external directory.
 // The checkout keeps no `.git`: it is generated output, replaced on every sync.
@@ -502,26 +521,40 @@ async function ensureSourceRepo(dir, steps) {
   const parent = path.dirname(dir);
   fs.mkdirSync(parent, { recursive: true });
   const tmp = path.join(parent, `.dsh-ponytail-${process.pid}-${Date.now()}`);
-  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { rmrf(tmp); } catch { /* ignore */ }
   const r = await runGit(["clone", "--depth", "1", url, tmp], parent);
   steps.push({ name: `git clone ${url}`, code: r.code, output: (r.stdout + r.stderr).trim().slice(-2000) });
   if (r.code !== 0) {
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmrf(tmp); } catch { /* ignore */ }
     return { ok: false, error: "git clone failed" };
   }
-  try { fs.rmSync(path.join(tmp, ".git"), { recursive: true, force: true }); } catch { /* ignore */ }
+  rmrf(path.join(tmp, ".git"));
   writeSourceMeta(tmp, url);
   try {
-    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    rmrf(dir);
     fs.renameSync(tmp, dir);
   } catch {
     // Target could not be replaced atomically: copy over it instead.
     fs.cpSync(tmp, dir, { recursive: true, force: true });
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { rmrf(tmp); } catch { /* ignore */ }
     writeSourceMeta(dir, url);
   }
   steps.push({ name: "materialized source (no .git)", code: 0, output: dir });
+  if (!(await stripGitDir(dir))) {
+    steps.push({ name: "remove .git", code: 1, output: "could not remove .git" });
+    return { ok: false, error: "could not remove .git from the source checkout" };
+  }
   return { ok: true };
+}
+
+// A leftover .git can survive the copy fallback when the old dir is locked.
+async function stripGitDir(dir) {
+  for (let i = 0; i < 6; i++) {
+    try { rmrf(path.join(dir, ".git")); } catch { /* ignore */ }
+    if (!fs.existsSync(path.join(dir, ".git"))) return true;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return false;
 }
 
 function nudgeReload() {
@@ -933,10 +966,9 @@ export function apply(ctx) {
       }
       const mode = normalizeMode(arg);
       if (!mode) {
-        return {
-          kind: "error",
-          text: `Unknown ponytail mode "${rawInput.trim()}". Use lite, full, ultra, or off.`,
-        };
+        // Skill invocations can pass a question here as rawInput; never fail a
+        // turn over that, and leave the current level untouched.
+        return { kind: "success", text: `Ponytail mode: ${modeForSession(sessionId)}.` };
       }
       setMode(sessionId, mode);
       return { kind: "success", text: `Ponytail mode: ${mode}.` };
