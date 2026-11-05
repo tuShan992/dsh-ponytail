@@ -83,7 +83,8 @@ window.__ModuleLoader__.load({
     let lastError = ''
     try {
       lastResult = JSON.parse(sessionStorage.getItem('dsh-ponytail.lastResult') || 'null')
-      lastError = sessionStorage.getItem('dsh-ponytail.lastError') || ''
+      // Errors are transient: never restore a stale one from a previous version.
+      sessionStorage.removeItem('dsh-ponytail.lastError')
     } catch {
       /* storage unavailable */
     }
@@ -230,7 +231,6 @@ window.__ModuleLoader__.load({
       }
       const setError = (value) => {
         lastError = value
-        try { sessionStorage.setItem('dsh-ponytail.lastError', value) } catch { /* ignore */ }
         setErrorState(value)
       }
 
